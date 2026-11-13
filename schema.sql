@@ -13,3 +13,5 @@ CREATE TABLE IF NOT EXISTS presence(client_id TEXT PRIMARY KEY,room_id INTEGER N
 CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),sender TEXT NOT NULL,receiver TEXT NOT NULL,payload TEXT NOT NULL,created REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS signals_target ON signals(receiver,id);
 CREATE INDEX IF NOT EXISTS messages_room ON messages(room_id,id);
+CREATE TABLE IF NOT EXISTS support_messages(id INTEGER PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),sender_id INTEGER NOT NULL REFERENCES users(id),recipient_id INTEGER NOT NULL REFERENCES users(id),content TEXT NOT NULL,created TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS support_room ON support_messages(room_id,id);

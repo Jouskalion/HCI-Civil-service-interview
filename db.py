@@ -29,6 +29,12 @@ def initialize(path, seed=True):
         c.executescript(
             Path(__file__).with_name("schema.sql").read_text(encoding="utf-8")
         )
+        # Additive migration keeps existing practice records and legacy comments.
+        columns = {row["name"] for row in c.execute("PRAGMA table_info(scores)")}
+        if "feedback_json" not in columns:
+            c.execute(
+                "ALTER TABLE scores ADD COLUMN feedback_json TEXT NOT NULL DEFAULT '{}'"
+            )
         if not seed or c.execute("SELECT count(*) FROM users").fetchone()[0]:
             return
         password = generate_password_hash("Demo2026!")
@@ -93,7 +99,7 @@ def initialize(path, seed=True):
             (5, [84, 83, 82, 81, 82, 85]),
         ]:
             c.execute(
-                "INSERT INTO scores VALUES (3,1,?,?,?,?,?)",
+                "INSERT INTO scores(room_id,candidate_id,examiner_id,values_json,comment,submitted,updated) VALUES (3,1,?,?,?,?,?)",
                 (
                     eid,
                     json.dumps(values),

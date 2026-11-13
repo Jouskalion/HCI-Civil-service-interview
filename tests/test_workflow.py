@@ -61,6 +61,141 @@ class WorkflowTests(unittest.TestCase):
             self.ready(name, rid)
         self.assertEqual(self.control("start", rid).status_code, 200)
 
+    def test_private_chief_contact_isolation(self):
+        sent = self.post(
+            "candidate",
+            "/rooms/2/support",
+            {"recipient_id": 4, "content": "设备权限出现问题，需要主考官帮助。"},
+        )
+        self.assertEqual(sent.status_code, 201)
+        for name in ("candidate", "chief"):
+            self.assertEqual(len(self.get(name, "/rooms/2").json["support"]), 1)
+        for name in ("candidate2", "examiner", "admin"):
+            detail = self.get(name, "/rooms/2").json
+            self.assertEqual(detail["support"], [])
+            self.assertFalse(
+                any("设备权限出现问题" in m["content"] for m in detail["messages"])
+            )
+        self.assertEqual(
+            self.post(
+                "candidate",
+                "/rooms/2/support",
+                {"recipient_id": 2, "content": "越权私信"},
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.post(
+                "candidate2",
+                "/rooms/1/support",
+                {"recipient_id": 4, "content": "跨房间消息"},
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.post(
+                "candidate",
+                "/rooms/3/support",
+                {"recipient_id": 4, "content": "归档后修改"},
+            ).status_code,
+            409,
+        )
+        self.assertEqual(
+            self.post(
+                "chief",
+                "/rooms/2/support",
+                {"recipient_id": 1, "content": "请检查浏览器站点设置，允许设备权限。"},
+            ).status_code,
+            201,
+        )
+        self.assertEqual(len(self.get("candidate", "/rooms/2").json["support"]), 2)
+
+    def test_existing_database_feedback_migration_preserves_scores(self):
+        import sqlite3
+        from contextlib import closing
+
+        database = self.app.config["DATABASE"]
+        with closing(sqlite3.connect(database)) as connection:
+            before = connection.execute(
+                "SELECT room_id,candidate_id,examiner_id,comment FROM scores"
+            ).fetchall()
+            connection.execute("ALTER TABLE scores DROP COLUMN feedback_json")
+        upgraded = create_app(
+            {"TESTING": True, "DATABASE": database, "SECRET_KEY": "test-key"}
+        )
+        with closing(sqlite3.connect(upgraded.config["DATABASE"])) as connection:
+            self.assertEqual(
+                connection.execute(
+                    "SELECT room_id,candidate_id,examiner_id,comment FROM scores"
+                ).fetchall(),
+                before,
+            )
+            self.assertTrue(
+                all(
+                    row[0] == "{}"
+                    for row in connection.execute("SELECT feedback_json FROM scores")
+                )
+            )
+
+    def test_structured_feedback_and_submission_progress(self):
+        self.start()
+        payload = {
+            "candidate_id": 1,
+            "values": [80] * 6,
+            "feedback": {
+                "evidence": "分析中引用了具体的办事环节。",
+                "strengths": "",
+                "suggestions": "",
+            },
+            "submit": False,
+        }
+        self.assertEqual(
+            self.post("chief", "/rooms/1/scores", payload).status_code, 200
+        )
+        self.assertEqual(self.get("examiner", "/rooms/1").json["scores"], [])
+        self.assertEqual(
+            self.get("candidate", "/rooms/1").json["submission_progress"], []
+        )
+        self.control("end")
+        payload["submit"] = True
+        self.assertEqual(
+            self.post("chief", "/rooms/1/scores", payload).status_code, 400
+        )
+        payload["feedback"].update(
+            strengths="表达条理清晰，能够回应群众诉求。",
+            suggestions="建议补充责任人和完成时限。",
+        )
+        self.assertEqual(
+            self.post("chief", "/rooms/1/scores", payload).status_code, 200
+        )
+        detail = self.get("chief", "/rooms/1").json
+        self.assertEqual(
+            detail["submission_progress"][0],
+            {"candidate_id": 1, "submitted": 1, "expected": 2},
+        )
+        self.assertEqual(
+            json.loads(detail["scores"][0]["feedback_json"]), payload["feedback"]
+        )
+        self.assertEqual(
+            self.post(
+                "examiner",
+                "/rooms/1/scores",
+                {
+                    "candidate_id": 1,
+                    "values": [82] * 6,
+                    "comment": "旧版评语仍兼容并保留。",
+                    "submit": True,
+                },
+            ).status_code,
+            200,
+        )
+        self.assertEqual(self.control("publish").status_code, 200)
+        result = self.get("candidate", "/rooms/1").json["results"][0]
+        self.assertEqual(result["total"], 81)
+        self.assertTrue(
+            any(c["feedback"] == payload["feedback"] for c in result["comments"])
+        )
+
     def test_waiting_privacy_and_permissions(self):
         d = self.get("candidate", "/rooms/1").json
         self.assertEqual(d["questions"][0]["body"], "请先检查设备并准备候考。")

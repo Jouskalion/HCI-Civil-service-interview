@@ -313,6 +313,7 @@ async function roomView(rid, gen) {
             )}</select></label><div id="score-form-container"></div></div></section>`
         : ""
     }</aside></div>`;
+  arrangeWorkspace();
   updateRoom(d, true);
   roomTimer = setInterval(() => refreshRoom().catch(showOffline), 3000);
   if (!isAdmin) {
@@ -460,12 +461,20 @@ function updateRoom(d, initial = false) {
   $("#results").innerHTML = r.published
     ? `<section class="panel" style="margin-top:20px"><div class="panel-head"><h2>成绩回顾</h2><a class="btn small" href="/api/export/${r.id}">导出成绩 CSV</a></div>${resultCards(d.results)}</section>`
     : "";
-  if (initial && isExam) renderScore();
+  updatePreparation(d);
+  updateMediaStatus();
+  updateSupport();
+  if (isExam && (initial || scorePhase !== r.status + ":" + r.published)) {
+    scorePhase = r.status + ":" + r.published;
+    renderScore();
+  }
+  updateScoreProgress();
   if ($("#message-form")) $("#message-form button").disabled = !!r.published;
 }
 function updateClock() {
   if (!roomData || !$("#clock")) return;
   const r = roomData.room;
+  $("#clock").classList.toggle("waiting-clock", r.status === "waiting");
   $("#clock").textContent = timeText(
     r.status === "active" && !r.paused
       ? (deadlineLocal - Date.now()) / 1000
@@ -491,15 +500,54 @@ function attachLocal() {
     if (stream) v.play().catch(() => {});
   }
 }
+const feedbackFields = [
+  ["evidence", "表现证据", "例如：回答中先核实办理环节，再给出具体分流方案。"],
+  ["strengths", "优点", "例如：分析层次清楚，能兼顾群众需求和办理规范。"],
+  ["suggestions", "改进建议", "例如：补充责任人、完成时限和验证措施。"],
+];
+const rubricExamples = [
+  "观察是否抓住问题本质、分析原因与影响；例如同时考虑群众诉求和办事规则。",
+  "观察表达是否条理清楚、用词准确；例如用分点和过渡句说明处理步骤。",
+  "观察论据能否支持结论、推理是否连贯；例如区分事实和假设，再解释方案的因果关系。",
+  "观察面对突发情况的判断与调整；例如先稳定现场，再分级处置并反馈。",
+  "观察倾听、分工与协调；例如先确认分歧，再提出可接受的共同方案。",
+  "观察仪态和回应态度；例如自然得体、尊重提问、保持礼貌。",
+];
 function renderScore() {
   let s = roomData.scores.find((x) => x.candidate_id === selectedCandidate);
   const draft = readDraft("score-" + selectedCandidate);
   if (draft && !s?.submitted && !roomData.room.published)
-    s = { values_json: JSON.stringify(draft.values), comment: draft.comment };
+    s = {
+      values_json: JSON.stringify(draft.values),
+      comment: draft.comment || "",
+      feedback_json: JSON.stringify(draft.feedback || {}),
+    };
   const values = s ? JSON.parse(s.values_json) : Array(6).fill(null),
-    locked = s?.submitted || roomData.room.published;
+    feedback = JSON.parse(s?.feedback_json || "{}"),
+    locked =
+      s?.submitted ||
+      roomData.room.published ||
+      roomData.room.status === "waiting";
   $("#score-form-container").innerHTML =
-    `<form id="score-form">${dimensions.map((name, i) => `<label class="score-row">${name}<input name="s${i}" aria-label="${name}" type="number" min="0" max="100" step="0.5" value="${values[i] ?? ""}" ${locked ? "disabled" : ""}></label>`).join("")}<div class="score-total"><span>当前均分</span><strong id="score-total">${values.every((x) => x !== null) ? (values.reduce((a, b) => a + b, 0) / 6).toFixed(1) : "—"}</strong></div><label class="field">考官评语<textarea name="comment" rows="3" style="min-height:80px" placeholder="记录具体表现与改进建议…" maxlength="2000" ${locked ? "disabled" : ""}>${esc(s?.comment || "")}</textarea></label><div class="inline-error" role="alert"></div>${locked ? '<span class="badge active">已提交评分</span>' : `${btn("暂存评分", "save-score", "full", 'type="button"')}${btn("提交最终评分", "submit-score", "primary full", 'type="button" style="margin-top:10px"')}`}<p class="muted" style="margin-top:12px">结束后才能最终提交；提交后锁定。主考官收齐全部评分后归档。</p></form>`;
+    `<div id="score-progress" class="score-progress"></div><details class="rubric"><summary>查看六维观察要点与示例</summary><p class="muted">课程练习参考，非官方招录标准。六维各 0–100 分，权重相同。</p>${dimensions.map((name, i) => `<p><b>${esc(name)}</b><br>${rubricExamples[i]}</p>`).join("")}</details><form id="score-form">${dimensions.map((name, i) => `<label class="score-row">${name}<input name="s${i}" aria-label="${name}" type="number" min="0" max="100" step="0.5" value="${values[i] ?? ""}" ${locked ? "disabled" : ""}></label>`).join("")}<div class="score-total"><span>六维等权均分</span><strong id="score-total">${values.every((x) => x !== null) ? (values.reduce((a, b) => a + b, 0) / 6).toFixed(1) : "—"}</strong></div>${feedbackFields.map(([key, label, example]) => `<label class="field">${label}<textarea name="${key}" rows="2" placeholder="${example}" maxlength="600" ${locked ? "disabled" : ""}>${esc(feedback[key] || "")}</textarea></label>`).join("")}${s?.comment && !Object.values(feedback).some(Boolean) ? `<details><summary>原有评语（保留）</summary><p>${esc(s.comment)}</p></details>` : ""}<input type="hidden" name="comment" value="${esc(s?.comment || "")}"><div class="inline-error" role="alert"></div>${locked ? `<span class="badge ${s?.submitted ? "active" : "waiting"}">${s?.submitted ? "已提交评分" : "正式开始后可填写评分"}</span>` : `${btn("暂存评分", "save-score", "full", 'type="button"')}${btn("提交最终评分", "submit-score", "primary full", 'type="button" style="margin-top:10px"')}`}<p id="score-save-status" class="muted">${draft ? "已恢复本浏览器的未暂存草稿" : s ? "已从服务器读取保存内容" : "输入会保留为本浏览器草稿，请点击暂存同步"}</p><p class="muted">结束后才能最终提交；提交后锁定。新评语的三项内容各至少 6 字。</p></form>`;
+  updateScoreProgress();
+}
+function updateScoreProgress() {
+  if (!$("#score-progress")) return;
+  const submitted = roomData.scores.filter((s) => s.submitted).length,
+    count = roomData.members.filter((m) => m.role === "candidate").length;
+  const f = $("#score-form"),
+    filled = dimensions.filter(
+      (_, i) => f.elements["s" + i].value !== "",
+    ).length,
+    comments = feedbackFields.filter(
+      ([k]) => f.elements[k].value.trim().length >= 6,
+    ).length;
+  const progress = (roomData.submission_progress || []).find(
+    (x) => x.candidate_id === selectedCandidate,
+  );
+  $("#score-progress").textContent =
+    `本人已提交 ${submitted}/${count} 位 · 当前分值 ${filled}/6 · 结构化评语 ${comments}/3${progress ? ` · 本考生已收齐 ${progress.submitted}/${progress.expected} 份评分` : ""}`;
 }
 async function saveScore(submit) {
   const f = $("#score-form"),
@@ -512,6 +560,9 @@ async function saveScore(submit) {
       candidate_id: selectedCandidate,
       values,
       comment: data.get("comment"),
+      feedback: Object.fromEntries(
+        feedbackFields.map(([key]) => [key, data.get(key)]),
+      ),
       submit,
     });
     removeDraft("score-" + selectedCandidate);
@@ -526,7 +577,7 @@ function resultCards(items) {
   return items
     .map(
       (x) =>
-        `<article class="resultcard"><div class="result-head"><div><h3>${esc(x.name)}</h3><small>六维等权均分，再对考官取平均</small></div><strong class="bigscore">${x.total ?? "—"}<small style="font-size:12px"> / 100</small></strong></div><div class="bars">${x.dimensions.map((v, i) => `<div class="bar">${dimensions[i]}<b>${v}</b><div><span style="width:${v}%"></span></div></div>`).join("")}</div>${x.comments.map((c) => `<p class="muted"><b>${esc(c.examiner)}：</b>${esc(c.comment)}</p>`).join("")}</article>`,
+        `<article class="resultcard"><div class="result-head"><div><h3>${esc(x.name)}</h3><small>六维等权均分，再对考官取平均</small></div><strong class="bigscore">${x.total ?? "—"}<small style="font-size:12px"> / 100</small></strong></div><div class="bars">${x.dimensions.map((v, i) => `<div class="bar">${dimensions[i]}<b>${v}</b><div><span style="width:${v}%"></span></div></div>`).join("")}</div>${x.comments.map((c) => `<p class="muted"><b>${esc(c.examiner)}：</b>${Object.values(c.feedback || {}).some(Boolean) ? feedbackFields.map(([k, label]) => `<span class="feedback-line"><b>${label}：</b>${esc(c.feedback[k] || "")}</span>`).join("") : esc(c.comment)}</p>`).join("")}</article>`,
     )
     .join("");
 }
@@ -589,10 +640,17 @@ function guideView() {
 
 async function deviceDialog() {
   if (!roomId) return;
+  if (roomData.room.status === "ended")
+    return toast("面试已结束，设备已释放；可在使用指南查看设备帮助");
+  if (callActive) {
+    stopCall();
+    await pollPresence();
+    toast("已断开通话，自检只在本机进行；完成后请主动重新连接");
+  }
   modal(
     "设备自检与本地预览",
     "此处不会建立音视频通话；画面与声音只在本机检测。",
-    `<div class="device-layout"><div><video id="checkvideo" class="device-video" muted autoplay playsinline></video><p class="muted">请正对镜头，检查光线、取景与着装。建议使用耳机。</p><label class="field">选择摄像头<select id="camera-select"><option value="">默认摄像头</option></select></label>${btn("开启摄像头与麦克风", "start-devices", "primary full")}</div><div><div class="device-row"><b>摄像头 · 目标 1280 × 720</b><small id="camera-check">设备未开启</small></div><div class="device-row"><b>麦克风 · 请正常说一句话</b><div class="meter"><span id="mic-meter"></span></div><small id="mic-check">设备未开启</small></div><div class="device-row"><b>扬声器</b>${btn("播放测试声音", "speaker", "small")}<label class="check"><input id="speaker-heard" type="checkbox">我已听清测试声音</label></div><div class="device-row"><b>网络与安全环境</b><small id="network-check">正在检查…</small></div></div></div><div class="notice">预览画面仅本地显示。实际分辨率可核验；端到端预览延迟尚未专门测量，不把网络往返时间当作预览延迟。</div><div class="inline-error" id="device-error" role="alert"></div><div class="dialog-footer">${btn("关闭，返回房间", "close")}${roomData.room.status === "waiting" ? btn("自检通过，确认就绪", "ready", "primary") : ""}</div>`,
+    `<div class="device-layout"><div><video id="checkvideo" class="device-video" muted autoplay playsinline></video><p class="muted">请正对镜头，检查光线、取景与着装。建议使用耳机。</p><label class="field">选择摄像头<select id="camera-select"><option value="">默认摄像头</option></select></label>${btn("开启摄像头与麦克风", "start-devices", "primary full")}</div><div><div class="device-row"><b>摄像头 · 目标 1280 × 720</b><small id="camera-check">设备未开启</small></div><div class="device-row"><b>麦克风 · 请正常说一句话</b><div class="meter"><span id="mic-meter"></span></div><small id="mic-check">设备未开启</small></div><div class="device-row"><b>扬声器</b>${btn("播放测试声音", "speaker", "small")}<label class="check"><input id="speaker-heard" type="checkbox">我已听清测试声音</label></div><div class="device-row"><b>网络与安全环境</b><small id="network-check">正在检查…</small></div></div></div><div class="notice">预览画面仅本地显示。实际分辨率可核验；端到端预览延迟尚未专门测量，不把网络往返时间当作预览延迟。</div><details class="device-help"><summary>设备异常？按问题查看处理方法</summary><ol><li><b>权限被拒绝：</b>点击地址栏站点设置，允许摄像头和麦克风，再重试。</li><li><b>设备被占用：</b>关闭其他会议、相机应用或使用设备的网页，再开启。</li><li><b>设备未找到：</b>检查 USB 连接和系统输入设备设置；尝试重新插入。</li><li><b>局域网普通 HTTP：</b>使用运行说明中的可信 HTTPS 地址；本机可用 localhost。</li><li><b>声音没有输入：</b>取消系统静音并选择正确的输入设备；通话中还需检查麦克风开关。</li><li><b>他人听不到或看不到：</b>确认面试已开始、双方都点击连接音视频；必要时重新连接或私密联系主考官。</li></ol></details><div class="inline-error" id="device-error" role="alert"></div><div class="dialog-footer">${btn("关闭，返回房间", "close")}${roomData.room.status === "waiting" ? btn("自检通过，确认就绪", "ready", "primary") : ""}</div>`,
   );
   attachLocal();
   await enumerateCameras();
@@ -600,11 +658,13 @@ async function deviceDialog() {
   try {
     await api("/session");
     networkOkay = true;
-    $("#network-check").textContent =
-      `服务器往返 ${Math.round(performance.now() - t)} ms · ${window.isSecureContext ? "安全环境可用" : "当前非安全环境，摄像头需要 HTTPS"}`;
+    if ($("#network-check"))
+      $("#network-check").textContent =
+        `服务器往返 ${Math.round(performance.now() - t)} ms · ${window.isSecureContext ? "安全环境可用" : "当前非安全环境，摄像头需要 HTTPS"}`;
   } catch {
     networkOkay = false;
-    $("#network-check").textContent = "网络未连接，请检查服务器";
+    if ($("#network-check"))
+      $("#network-check").textContent = "网络未连接，请检查服务器";
   }
   if (stream) updateDeviceReadouts();
 }
@@ -657,6 +717,7 @@ async function acquireMedia(constraints) {
   }
 }
 async function startDevices(deviceId) {
+  if (!roomId || roomData?.room.status === "ended") return;
   if (!navigator.mediaDevices?.getUserMedia) {
     toast("摄像头需要 localhost 或可信 HTTPS 地址，请查看使用指南");
     return;
@@ -674,7 +735,7 @@ async function startDevices(deviceId) {
       },
       audio: false,
     });
-    if (roomId !== captureRoom) {
+    if (roomId !== captureRoom || roomData?.room.status === "ended") {
       video.getTracks().forEach((t) => t.stop());
       return;
     }
@@ -696,13 +757,15 @@ async function startDevices(deviceId) {
   } catch (e) {
     errors.push("摄像头：" + mediaError(e));
   }
-  if (!stream.getAudioTracks().length)
+  if (roomId !== captureRoom || !stream || roomData?.room.status === "ended")
+    return;
+  if (!stream.getAudioTracks().some((t) => t.readyState === "live"))
     try {
       const a = await acquireMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
         video: false,
       });
-      if (roomId !== captureRoom) {
+      if (roomId !== captureRoom || roomData?.room.status === "ended") {
         a.getTracks().forEach((t) => t.stop());
         return;
       }
@@ -720,11 +783,14 @@ async function startDevices(deviceId) {
 function mediaError(e) {
   return (
     {
-      PermissionTimeout: "设备授权等待超时，请检查浏览器权限后重试",
-      NotAllowedError: "未授权，请在浏览器站点设置中允许",
-      NotFoundError: "没有检测到设备",
-      NotReadableError: "设备被占用或不可读取",
-      OverconstrainedError: "设备不支持所选参数",
+      PermissionTimeout:
+        "授权等待超时。请查看地址栏的权限请求，允许后点击开启设备重试",
+      NotAllowedError:
+        "权限被拒绝。请打开地址栏站点设置，允许摄像头和麦克风后重试",
+      NotFoundError: "未找到设备。请检查连接和系统输入设备设置，再点击开启设备",
+      NotReadableError: "设备被占用。请关闭其他会议或相机应用，再点击开启设备",
+      OverconstrainedError:
+        "所选设备不可用。请切回默认摄像头，或重新插入设备后重试",
     }[e.name] || "开启失败，请检查设备连接"
   );
 }
@@ -756,6 +822,7 @@ async function meterStart() {
   tick();
 }
 function updateDeviceReadouts() {
+  updateMediaStatus();
   const track = stream?.getVideoTracks()[0],
     settings = track?.getSettings();
   if ($("#camera-check"))
@@ -825,14 +892,17 @@ async function connectCall() {
   }
   if (roomData.room.status !== "active")
     return toast("请等待主考官正式开始面试");
-  if (!stream?.getVideoTracks().length || !stream?.getAudioTracks().length)
-    await startDevices();
+  if (!stream?.getVideoTracks().length || !stream?.getAudioTracks().length) {
+    await deviceDialog();
+    return toast("先完成本地设备检查，再主动连接音视频");
+  }
   if (
     !stream?.getVideoTracks().some((t) => t.readyState === "live") ||
     !stream?.getAudioTracks().some((t) => t.readyState === "live")
   )
     return toast("请先成功开启摄像头与麦克风");
   callActive = true;
+  hadCall = true;
   $("#media-status").textContent =
     "通话连接中 · 将向本房间已连接成员发送音视频";
   $("#connect-btn").textContent = "断开音视频";
@@ -851,6 +921,7 @@ function stopCall() {
   if ($("#media-status"))
     $("#media-status").textContent = "未连接通话 · 本地预览不会自动发送";
   if ($("#connect-btn")) $("#connect-btn").textContent = "连接音视频";
+  updateMediaStatus();
 }
 async function sendSignal(receiver, payload) {
   return api(`/rooms/${roomId}/signal`, "POST", {
@@ -904,6 +975,7 @@ function getPeer(peer) {
     if (pc.connectionState === "connected" && $("#media-status"))
       $("#media-status").textContent =
         "通话已连接 · 音视频正在向其他参与者发送";
+    updateMediaStatus();
     if (["failed", "disconnected"].includes(pc.connectionState)) {
       showOffline(
         new Error("音视频连接中断，正在尝试恢复；必要时请主考官暂停计时"),
@@ -997,6 +1069,7 @@ async function pollPresence() {
       );
   } finally {
     pollBusy = false;
+    updateMediaStatus();
   }
 }
 async function leaveRoom() {
@@ -1021,6 +1094,7 @@ async function leaveRoom() {
     audioCtx = null;
   }
   roomData = null;
+  hadCall = false;
   clientId = crypto.randomUUID();
   signalCursor = 0;
   pollBusy = false;
@@ -1036,6 +1110,12 @@ document.addEventListener("click", async (e) => {
   const act = b.dataset.act;
   try {
     switch (act) {
+      case "workspace-tab":
+        selectWorkspaceTab(b.dataset.tab);
+        break;
+      case "support":
+        supportDialog();
+        break;
       case "login":
         loginDialog();
         break;
@@ -1104,6 +1184,7 @@ document.addEventListener("click", async (e) => {
           .find((x) => x.kind === (act === "mic" ? "audio" : "video"));
         if (!t) return toast("请先开启设备");
         t.enabled = !t.enabled;
+        updateMediaStatus();
         b.classList.toggle("danger", !t.enabled);
         b.title = t.enabled ? "已开启" : "已关闭";
         toast(
@@ -1235,6 +1316,14 @@ document.addEventListener("submit", async (e) => {
   if (submit) submit.disabled = true;
   try {
     switch (f.id) {
+      case "support-form":
+        await api(`/rooms/${roomId}/support`, "POST", {
+          recipient_id: Number(value.recipient_id),
+          content: value.content,
+        });
+        f.elements.content.value = "";
+        await refreshRoom();
+        break;
       case "login-form": {
         await leaveRoom();
         const r = await api("/login", "POST", value);
@@ -1315,7 +1404,16 @@ document.addEventListener("input", (e) => {
     saveDraft("score-" + selectedCandidate, {
       values: vals.map((x) => (x === "" ? null : Number(x))),
       comment: $("#score-form").elements.comment.value,
+      feedback: Object.fromEntries(
+        feedbackFields.map(([key]) => [
+          key,
+          $("#score-form").elements[key].value,
+        ]),
+      ),
     });
+    $("#score-save-status").textContent =
+      "本浏览器草稿已保留，请点击暂存同步到服务器";
+    updateScoreProgress();
     $("#score-total").textContent = vals.every(
       (x) => x !== "" && Number.isFinite(Number(x)),
     )
@@ -1324,6 +1422,7 @@ document.addEventListener("input", (e) => {
   }
 });
 document.addEventListener("change", async (e) => {
+  if (e.target.id === "support-recipient") updateSupport();
   if (e.target.id === "status-filter") roomTable();
   if (e.target.id === "score-candidate") {
     selectedCandidate = Number(e.target.value);
@@ -1352,6 +1451,187 @@ function removeDraft(type) {
     localStorage.removeItem(draftKey(type));
   } catch {}
 }
+
+let hadCall = false;
+let scorePhase = "";
+function arrangeWorkspace() {
+  const main = $(".main-column"),
+    question = $("#question").closest("section");
+  question.classList.add("question-panel");
+  main.prepend(question);
+  $("#room-notice").insertAdjacentHTML(
+    "afterend",
+    '<div id="preparation"></div>',
+  );
+  if (user.role !== "admin")
+    $(".room-top .meta").insertAdjacentHTML(
+      "afterend",
+      `<div class="room-contact">${btn(user.id === roomData.room.chief_id ? "候场联系" : "联系主考官", "support", "small")}${user.role === "examiner" ? '<a class="btn small" href="#" id="score-jump">前往评分 ↓</a>' : ""}<span class="muted">私密消息仅联系双方可见</span></div>`,
+    );
+  if ($("#score-jump"))
+    $("#score-jump").addEventListener("click", (e) => {
+      e.preventDefault();
+      $("#score-candidate").focus();
+    });
+  const panes = [
+    ["note", user.role === "examiner" ? "观察笔记" : "个人笔记"],
+    ["chatlog", "讨论记录"],
+    ["answers", "答题记录"],
+  ].filter(([id]) => $("#" + id));
+  const workbench = document.createElement("section");
+  workbench.className = "workbench";
+  workbench.innerHTML = `<div class="workspace-tabs" role="tablist" aria-label="面试辅助工作区">${panes.map(([id, label]) => `<button class="btn ghost" data-act="workspace-tab" data-tab="${id}" id="tab-${id}" role="tab" aria-controls="pane-${id}">${label}</button>`).join("")}</div>`;
+  main.insertBefore(
+    workbench,
+    panes.length ? $("#" + panes[0][0]).closest("section") : $("#results"),
+  );
+  panes.forEach(([id]) => {
+    const panel = $("#" + id).closest("section");
+    panel.classList.add("workspace-pane");
+    panel.id = "pane-" + id;
+    panel.setAttribute("role", "tabpanel");
+    panel.setAttribute("aria-labelledby", "tab-" + id);
+    workbench.append(panel);
+  });
+  selectWorkspaceTab(panes[0][0]);
+  $(".workspace-tabs").addEventListener("keydown", (e) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const tabs = [...document.querySelectorAll("[data-tab]")],
+      i = tabs.indexOf(document.activeElement);
+    const next =
+      e.key === "Home"
+        ? 0
+        : e.key === "End"
+          ? tabs.length - 1
+          : (i + (e.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+    selectWorkspaceTab(tabs[next].dataset.tab);
+    tabs[next].focus();
+  });
+}
+function selectWorkspaceTab(id) {
+  document.querySelectorAll("[data-tab]").forEach((b) => {
+    const selected = b.dataset.tab === id;
+    b.setAttribute("aria-selected", String(selected));
+    b.tabIndex = selected ? 0 : -1;
+    b.classList.toggle("selected", selected);
+    $("#pane-" + b.dataset.tab).classList.toggle("hidden", !selected);
+  });
+}
+function updatePreparation(d) {
+  const r = d.room,
+    el = $("#preparation");
+  if (!el) return;
+  if (r.status !== "waiting") {
+    el.innerHTML = "";
+    return;
+  }
+  const self = d.members.find((m) => m.id === user.id),
+    chief = d.members.find((m) => m.id === r.chief_id),
+    pending = d.members.filter((m) => m.role === "candidate" && !m.ready),
+    timeReady = new Date(r.scheduled).getTime() <= r.server_time * 1000;
+  const readyAll = !pending.length && chief?.ready,
+    reason = !timeReady
+      ? `尚未到计划时间 ${date(r.scheduled)}`
+      : !readyAll
+        ? `等待 ${[...pending.map((m) => m.name), ...(!chief?.ready ? [chief?.name + "（主考官）"] : [])].join("、")} 完成准备`
+        : "准备条件已满足，等待主考官点击“正式开始面试”";
+  const steps = [
+    [true, "已进入候考", "尚未启动计时"],
+    [
+      !!self?.ready,
+      user.role === "admin"
+        ? "管理观察"
+        : self?.ready
+          ? "个人已就绪"
+          : "个人准备",
+      self?.device?.mode === "text"
+        ? "文字演练 · 设备未验证"
+        : self?.ready
+          ? "设备自检已确认"
+          : "完成设备自检后确认就绪",
+    ],
+    [
+      readyAll,
+      "核对开考条件",
+      readyAll ? "所有考生及主考官已就绪" : "检查成员准备状态",
+    ],
+    [false, "等待正式开始", timeReady ? "由主考官控制" : "尚未到计划时间"],
+  ];
+  el.innerHTML = `<section class="preparation"><div class="preparation-heading"><b>候考准备清单</b><span>当前：${esc(reason)}</span></div><ol>${steps.map(([ok, title, detail], i) => `<li class="${ok ? "done" : ""}"><span>${ok ? "✓" : i + 1}</span><div><b>${title}</b><small>${detail}</small></div></li>`).join("")}</ol></section>`;
+}
+function supportDialog() {
+  const d = roomData,
+    chief = user.id === d.room.chief_id,
+    recipients = d.members.filter(
+      (m) => m.id !== user.id && (chief || m.id === d.room.chief_id),
+    );
+  modal(
+    chief ? "候场联系" : "私密联系主考官",
+    "用于候考、设备与流程问题；消息仅发送者和接收者可见。",
+    `<form id="support-form"><label class="field">联系对象<select name="recipient_id" id="support-recipient">${recipients.map((m) => `<option value="${m.id}">${esc(m.name)} · ${m.id === d.room.chief_id ? "主考官" : roleNames[m.role]}</option>`).join("")}</select></label><div id="support-log" class="chatlog support-log" aria-live="polite"></div><label class="field">消息内容<textarea name="content" required maxlength="1000" placeholder="例如：我已进入候考，但设备权限被拒绝，需要帮助。" ${d.room.published ? "disabled" : ""}></textarea></label><div class="inline-error" role="alert"></div><div class="dialog-footer"><button class="btn primary" ${d.room.published ? "disabled" : ""}>${d.room.published ? "归档后只读" : "发送私密消息"}</button></div></form>`,
+  );
+  updateSupport();
+}
+function updateSupport() {
+  const el = $("#support-log");
+  if (!el) return;
+  const recipient = Number($("#support-recipient").value),
+    items = (roomData.support || []).filter(
+      (m) => m.sender_id === recipient || m.recipient_id === recipient,
+    ),
+    key = JSON.stringify(items);
+  if (el.dataset.key === key) return;
+  el.dataset.key = key;
+  el.innerHTML =
+    items
+      .map(
+        (m) =>
+          `<div class="chatitem ${m.sender_id === user.id ? "mine" : ""}"><small>${esc(m.sender_name)} → ${esc(m.recipient_name)} · ${date(m.created)}</small>${esc(m.content).replaceAll("\n", "<br>")}</div>`,
+      )
+      .join("") ||
+    '<p class="muted">尚无私密消息。公共讨论和考官内部频道不会显示这里的内容。</p>';
+  el.scrollTop = el.scrollHeight;
+}
+function updateMediaStatus() {
+  const el = $("#media-status");
+  if (!el) return;
+  const live = stream?.getTracks().filter((t) => t.readyState === "live") || [],
+    connected = [...peers.values()].filter(
+      (p) => p.pc.connectionState === "connected",
+    ).length,
+    failed = [...peers.values()].some((p) =>
+      ["failed", "disconnected"].includes(p.pc.connectionState),
+    );
+  let label =
+    roomData?.room.status === "ended"
+      ? "面试已结束 · 设备已释放"
+      : !callActive
+        ? live.length
+          ? hadCall
+            ? "已断开通话 · 仅本地预览，未向他人发送"
+            : "仅本地预览 · 未向他人发送音视频"
+          : "设备未开启 · 未向他人发送音视频"
+        : connected
+          ? `通话已连接 ${connected} 人 · ${live.some((t) => t.kind === "audio" && t.enabled) ? "麦克风开启" : "麦克风静音"} · ${live.some((t) => t.kind === "video" && t.enabled) ? "摄像头开启" : "摄像头关闭"}`
+          : failed
+            ? "通话连接中断 · 正在尝试恢复"
+            : peers.size
+              ? "正在建立通话连接 · 等待连接成功"
+              : "等待其他参与者连接 · 尚未向他人发送";
+  el.textContent = label;
+  el.className = connected ? "media-state sending" : "media-state local";
+  const own = $(`[data-tile="${user?.id}"] .tile-status`);
+  if (own)
+    own.textContent = connected
+      ? "通话已连接"
+      : callActive
+        ? "等待通话连接"
+        : live.length
+          ? "仅本地预览"
+          : "设备未开启";
+}
+
 window.addEventListener("hashchange", route);
 window.addEventListener("offline", () => showOffline(new Error("网络已断开")));
 window.addEventListener("online", () => {

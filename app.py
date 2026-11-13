@@ -215,7 +215,11 @@ def create_app(config=None):
                         else []
                     ),
                     "comments": [
-                        {"examiner": x["examiner"], "comment": x["comment"]}
+                        {
+                            "examiner": x["examiner"],
+                            "comment": x["comment"],
+                            "feedback": json.loads(x["feedback_json"]),
+                        }
                         for x in rows
                     ],
                 }
@@ -480,8 +484,66 @@ def create_app(config=None):
             scores=scores,
             answers=answers,
             extensions=extensions,
+            support=(
+                [
+                    dict(x)
+                    for x in c.execute(
+                        "SELECT m.*,s.name sender_name,t.name recipient_name FROM support_messages m JOIN users s ON s.id=m.sender_id JOIN users t ON t.id=m.recipient_id WHERE m.room_id=? AND (m.sender_id=? OR m.recipient_id=?) ORDER BY m.id DESC LIMIT 100",
+                        (rid, g.user["id"], g.user["id"]),
+                    )
+                ][::-1]
+                if g.user["role"] != "admin"
+                else []
+            ),
+            submission_progress=(
+                [
+                    {
+                        "candidate_id": m["id"],
+                        "submitted": c.execute(
+                            "SELECT count(*) FROM scores WHERE room_id=? AND candidate_id=? AND submitted=1",
+                            (rid, m["id"]),
+                        ).fetchone()[0],
+                        "expected": sum(x["role"] == "examiner" for x in members),
+                    }
+                    for m in members
+                    if m["role"] == "candidate"
+                ]
+                if g.user["id"] == r["chief_id"]
+                else []
+            ),
             results=results(rid) if r["published"] else [],
         )
+
+    @app.post("/api/rooms/<int:rid>/support")
+    @auth("candidate", "examiner")
+    def support_message(rid):
+        r = room(rid)
+        require(not r["published"], "已归档房间只读", 409)
+        d = body()
+        recipient = d.get("recipient_id")
+        require(type(recipient) is int and recipient != g.user["id"], "请选择联系对象")
+        require(
+            g.user["id"] == r["chief_id"] or recipient == r["chief_id"],
+            "只能私密联系本房间主考官",
+            403,
+        )
+        require(
+            get_db()
+            .execute(
+                "SELECT 1 FROM members WHERE room_id=? AND user_id=?", (rid, recipient)
+            )
+            .fetchone(),
+            "联系对象不属于本房间",
+            403,
+        )
+        value = text(d.get("content", ""), 1000)
+        require(value, "请说明需要帮助的问题")
+        with get_db() as c:
+            c.execute(
+                "INSERT INTO support_messages(room_id,sender_id,recipient_id,content,created) VALUES (?,?,?,?,?)",
+                (rid, g.user["id"], recipient, value, now()),
+            )
+        return jsonify(ok=True), 201
 
     @app.post("/api/rooms/<int:rid>/ready")
     @auth("candidate", "examiner")
@@ -777,8 +839,29 @@ def create_app(config=None):
                 "六个评分项须为 0 至 100 分或留空",
             )
             comment = text(d.get("comment", ""), 2000)
+            feedback = d.get("feedback", {})
+            require(isinstance(feedback, dict), "评语格式无效")
+            feedback = {
+                key: text(feedback.get(key, ""), 600)
+                for key in ("evidence", "strengths", "suggestions")
+            }
+            has_feedback = any(feedback.values())
+            if has_feedback:
+                comment = "\n".join(
+                    label + "：" + feedback[key]
+                    for key, label in [
+                        ("evidence", "表现证据"),
+                        ("strengths", "优点"),
+                        ("suggestions", "改进建议"),
+                    ]
+                    if feedback[key]
+                )
             submitted = d.get("submit") is True
             if submitted:
+                require(
+                    not has_feedback or all(len(v) >= 6 for v in feedback.values()),
+                    "请补齐表现证据、优点和改进建议，每项至少 6 字",
+                )
                 require(
                     r["status"] == "ended"
                     and all(x is not None for x in values)
@@ -791,7 +874,7 @@ def create_app(config=None):
             ).fetchone()
             require(not old or not old[0], "已提交评分不可修改", 409)
             c.execute(
-                "INSERT INTO scores VALUES (?,?,?,?,?,?,?) ON CONFLICT(room_id,candidate_id,examiner_id) DO UPDATE SET values_json=excluded.values_json,comment=excluded.comment,submitted=excluded.submitted,updated=excluded.updated",
+                "INSERT INTO scores(room_id,candidate_id,examiner_id,values_json,comment,submitted,updated,feedback_json) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(room_id,candidate_id,examiner_id) DO UPDATE SET values_json=excluded.values_json,comment=excluded.comment,submitted=excluded.submitted,updated=excluded.updated,feedback_json=excluded.feedback_json",
                 (
                     rid,
                     cid,
@@ -800,6 +883,7 @@ def create_app(config=None):
                     comment,
                     int(submitted),
                     now(),
+                    json.dumps(feedback, ensure_ascii=False) if has_feedback else "{}",
                 ),
             )
         return jsonify(ok=True)
