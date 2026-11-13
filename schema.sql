@@ -1,0 +1,15 @@
+PRAGMA foreign_keys=ON;
+CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY,username TEXT UNIQUE NOT NULL,password TEXT NOT NULL,name TEXT NOT NULL,role TEXT NOT NULL CHECK(role IN ('candidate','examiner','admin')));
+CREATE TABLE IF NOT EXISTS rooms(id INTEGER PRIMARY KEY,title TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('structured','group')),status TEXT NOT NULL DEFAULT 'waiting' CHECK(status IN ('waiting','active','ended')),chief_id INTEGER NOT NULL REFERENCES users(id),scheduled TEXT NOT NULL,duration INTEGER NOT NULL,deadline REAL,remaining INTEGER NOT NULL,paused INTEGER NOT NULL DEFAULT 0,phase INTEGER NOT NULL DEFAULT 0,current_question INTEGER NOT NULL DEFAULT 0,published INTEGER NOT NULL DEFAULT 0,allow_text INTEGER NOT NULL DEFAULT 0,version INTEGER NOT NULL DEFAULT 1,created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS members(room_id INTEGER REFERENCES rooms(id),user_id INTEGER REFERENCES users(id),ready INTEGER NOT NULL DEFAULT 0,device_json TEXT NOT NULL DEFAULT '{}',raised INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(room_id,user_id));
+CREATE TABLE IF NOT EXISTS questions(id INTEGER PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),position INTEGER NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,hint TEXT NOT NULL,UNIQUE(room_id,position));
+CREATE TABLE IF NOT EXISTS notes(room_id INTEGER REFERENCES rooms(id),user_id INTEGER REFERENCES users(id),content TEXT NOT NULL,updated TEXT NOT NULL,PRIMARY KEY(room_id,user_id));
+CREATE TABLE IF NOT EXISTS answers(room_id INTEGER REFERENCES rooms(id),user_id INTEGER REFERENCES users(id),question_id INTEGER REFERENCES questions(id),content TEXT NOT NULL,submitted TEXT NOT NULL,PRIMARY KEY(room_id,user_id,question_id));
+CREATE TABLE IF NOT EXISTS scores(room_id INTEGER REFERENCES rooms(id),candidate_id INTEGER REFERENCES users(id),examiner_id INTEGER REFERENCES users(id),values_json TEXT NOT NULL,comment TEXT NOT NULL,submitted INTEGER NOT NULL DEFAULT 0,updated TEXT NOT NULL,PRIMARY KEY(room_id,candidate_id,examiner_id));
+CREATE TABLE IF NOT EXISTS messages(id INTEGER PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),user_id INTEGER REFERENCES users(id),kind TEXT NOT NULL CHECK(kind IN ('public','examiner','system')),content TEXT NOT NULL,created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS extensions(id INTEGER PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),user_id INTEGER NOT NULL REFERENCES users(id),reason TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',created TEXT NOT NULL);
+CREATE UNIQUE INDEX IF NOT EXISTS one_pending_extension ON extensions(room_id,user_id) WHERE status='pending';
+CREATE TABLE IF NOT EXISTS presence(client_id TEXT PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),user_id INTEGER NOT NULL REFERENCES users(id),seen REAL NOT NULL,media INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS signals(id INTEGER PRIMARY KEY,room_id INTEGER NOT NULL REFERENCES rooms(id),sender TEXT NOT NULL,receiver TEXT NOT NULL,payload TEXT NOT NULL,created REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS signals_target ON signals(receiver,id);
+CREATE INDEX IF NOT EXISTS messages_room ON messages(room_id,id);

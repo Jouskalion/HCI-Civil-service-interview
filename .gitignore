@@ -1,0 +1,14 @@
+.venv/
+.local/
+__pycache__/
+*.pyc
+.coverage*
+htmlcov/
+.env
+*.log
+build/
+
+# Coursework deliverables stay local.
+/docs/
+*.docx
+*.pdf

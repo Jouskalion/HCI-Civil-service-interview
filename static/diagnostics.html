@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>浏览器通话诊断 · 仕途面试通</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main>
+      <div class="heading">
+        <div>
+          <h1>浏览器音视频连接诊断</h1>
+          <p>
+            用合成图案和静音音轨测试本浏览器的 WebRTC，不调用摄像头、麦克风。
+          </p>
+        </div>
+        <a class="btn" href="/#guide">返回使用指南</a>
+      </div>
+      <div class="notice">
+        这是同一浏览器内的双端连接检查，可以验证编码、连接与解码；不代替两台实体设备的局域网测试，也不验证真实摄像头清晰度、麦克风输入或
+        200ms 预览延迟。
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h2>合成发送端 → WebRTC → 接收端</h2>
+          <button id="run" class="btn primary">开始连接诊断</button>
+        </div>
+        <div class="panel-body">
+          <div class="videos">
+            <div>
+              <canvas
+                id="source"
+                width="1280"
+                height="720"
+                style="width: 100%; border-radius: 7px"
+              ></canvas>
+              <p class="muted">本地生成 · 1280 × 720</p>
+            </div>
+            <div>
+              <video
+                id="remote"
+                autoplay
+                muted
+                playsinline
+                style="
+                  width: 100%;
+                  aspect-ratio: 16/9;
+                  background: #13233d;
+                  border-radius: 7px;
+                "
+              ></video>
+              <p class="muted">经 WebRTC 收到的合成媒体</p>
+            </div>
+          </div>
+          <div id="state" class="notice" role="status">尚未运行</div>
+          <div id="stats" class="muted"></div>
+        </div>
+      </div>
+    </main>
+    <script>
+      const canvas = document.querySelector("#source"),
+        ctx = canvas.getContext("2d");
+      let pc1, pc2, stream, audio, drawId, timer;
+      function draw() {
+        const t = performance.now() / 1000;
+        ctx.fillStyle = "#16345e";
+        ctx.fillRect(0, 0, 1280, 720);
+        ctx.fillStyle = "#2a5f9e";
+        for (let i = 0; i < 10; i++) {
+          ctx.beginPath();
+          ctx.arc(
+            130 + i * 130,
+            360 + Math.sin(t + i) * 130,
+            55,
+            0,
+            Math.PI * 2,
+          );
+          ctx.fill();
+        }
+        ctx.fillStyle = "#fff";
+        ctx.font = "48px sans-serif";
+        ctx.fillText("WebRTC · 合成画面", 65, 100);
+        ctx.font = "30px sans-serif";
+        ctx.fillText(
+          new Date().toLocaleTimeString() + " · 1280 × 720",
+          65,
+          645,
+        );
+        drawId = requestAnimationFrame(draw);
+      }
+      draw();
+      async function cleanup() {
+        clearInterval(timer);
+        pc1?.close();
+        pc2?.close();
+        stream?.getTracks().forEach((t) => t.stop());
+        if (audio) await audio.close();
+      }
+      document.querySelector("#run").onclick = async () => {
+        const state = document.querySelector("#state");
+        try {
+          await cleanup();
+          stream = canvas.captureStream(24);
+          audio = new AudioContext();
+          await audio.resume();
+          const oscillator = audio.createOscillator(),
+            gain = audio.createGain(),
+            destination = audio.createMediaStreamDestination();
+          gain.gain.value = 0;
+          oscillator.connect(gain);
+          gain.connect(destination);
+          oscillator.start();
+          stream.addTrack(destination.stream.getAudioTracks()[0]);
+          pc1 = new RTCPeerConnection({ iceServers: [] });
+          pc2 = new RTCPeerConnection({ iceServers: [] });
+          const pending1 = [],
+            pending2 = [];
+          pc1.onicecandidate = (e) => {
+            if (e.candidate) {
+              if (pc2.remoteDescription)
+                pc2.addIceCandidate(e.candidate).catch(() => {});
+              else pending2.push(e.candidate);
+            }
+          };
+          pc2.onicecandidate = (e) => {
+            if (e.candidate) {
+              if (pc1.remoteDescription)
+                pc1.addIceCandidate(e.candidate).catch(() => {});
+              else pending1.push(e.candidate);
+            }
+          };
+          pc2.ontrack = (e) => {
+            document.querySelector("#remote").srcObject = e.streams[0];
+          };
+          stream.getTracks().forEach((t) => pc1.addTrack(t, stream));
+          pc1.onconnectionstatechange = () => {
+            state.textContent = "发送端连接状态：" + pc1.connectionState;
+          };
+          await pc1.setLocalDescription(await pc1.createOffer());
+          await pc2.setRemoteDescription(pc1.localDescription);
+          for (const c of pending2) await pc2.addIceCandidate(c);
+          await pc2.setLocalDescription(await pc2.createAnswer());
+          await pc1.setRemoteDescription(pc2.localDescription);
+          for (const c of pending1) await pc1.addIceCandidate(c);
+          timer = setInterval(async () => {
+            const stats = await pc2.getStats();
+            let video, audioStats;
+            stats.forEach((s) => {
+              if (s.type === "inbound-rtp") {
+                if (s.kind === "video") video = s;
+                else if (s.kind === "audio") audioStats = s;
+              }
+            });
+            document.querySelector("#stats").textContent =
+              `接收视频帧：${video?.framesDecoded || 0}；视频字节：${video?.bytesReceived || 0}；音频字节：${audioStats?.bytesReceived || 0}；接收分辨率：${video?.frameWidth || 0} × ${video?.frameHeight || 0}`;
+            if (video?.framesDecoded > 0 && audioStats?.bytesReceived > 0)
+              state.textContent =
+                "连接诊断通过：已接收并解码合成视频与静音音轨。";
+          }, 1000);
+        } catch (e) {
+          state.textContent = "诊断失败：" + e.message;
+        }
+      };
+      window.addEventListener("beforeunload", cleanup);
+    </script>
+  </body>
+</html>
