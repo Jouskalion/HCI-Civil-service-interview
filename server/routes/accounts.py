@@ -92,5 +92,3 @@ def register(app):
                 for x in get_db().execute("SELECT id,name,role FROM users ORDER BY id")
             ]
         )
-
-

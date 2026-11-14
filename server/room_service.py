@@ -101,5 +101,3 @@ def results(rid):
             }
         )
     return out
-
-

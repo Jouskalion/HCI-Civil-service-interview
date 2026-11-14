@@ -96,5 +96,3 @@ def register(app):
                 (rid, sender, receiver, value, time.time()),
             )
         return jsonify(ok=True)
-
-

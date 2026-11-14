@@ -69,5 +69,3 @@ def register(app):
         if request.path.startswith("/api/"):
             r.headers["Cache-Control"] = "no-store"
         return r
-
-

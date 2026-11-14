@@ -147,5 +147,3 @@ def register(app):
                 "Content-Disposition": f'attachment; filename="interview-{rid}.csv"'
             },
         )
-
-

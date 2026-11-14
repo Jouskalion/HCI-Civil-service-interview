@@ -22,5 +22,3 @@ def body():
     d = request.get_json(silent=True)
     require(isinstance(d, dict), "请求格式无效")
     return d
-
-

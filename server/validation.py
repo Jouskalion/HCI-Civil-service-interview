@@ -20,5 +20,3 @@ def text(value, limit=5000):
 def integer(value, lo, hi):
     require(type(value) is int and lo <= value <= hi, f"数值须为 {lo} 至 {hi} 的整数")
     return value
-
-

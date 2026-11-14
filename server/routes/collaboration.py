@@ -167,5 +167,3 @@ def register(app):
                     + ("同意延时 60 秒。" if approve else "未同意此次延时申请。"),
                 )
         return jsonify(ok=True)
-
-

@@ -167,5 +167,3 @@ def register(app):
             c.execute("UPDATE rooms SET version=version+1 WHERE id=?", (rid,))
             event(rid, label)
         return jsonify(ok=True)
-
-

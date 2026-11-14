@@ -232,5 +232,3 @@ def register(app):
             ),
             results=results(rid) if r["published"] else [],
         )
-
-
