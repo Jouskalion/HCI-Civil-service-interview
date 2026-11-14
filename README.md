@@ -97,14 +97,22 @@ WebRTC 默认使用同一局域网内的直接连接，不配置外部 STUN/TURN
 
 | 文件 | 用途 |
 | --- | --- |
-| app.py | HTTP 接口、角色授权、状态转换、评分和信令校验 |
+| app.py | 应用工厂与启动入口，组装后端模块 |
+| server/config.py / validation.py | 项目路径、评分维度与输入校验 |
+| server/lifecycle.py / security.py | 请求生命周期、错误处理、会话认证与接口授权 |
+| server/routes/ | 账号、房间、协作、场次控制、评分与信令接口 |
+| server/room_service.py | 房间访问、角色判断、计时、事件与评分辅助 |
 | db.py / schema.sql | SQLite 初始化、独立教学样例、外键与唯一约束 |
 | lan.py | 项目内证书生成与 HTTPS 启动，不修改系统信任 |
-| static/app.js | 三角色页面、设备自检、WebRTC、交互与草稿保护 |
+| static/app.js | 前端启动与全局事件入口 |
+| static/js/ | 账号、导航、房间、评分、设备、WebRTC 与草稿模块 |
+| static/js/state.js / api.js / ui.js | 显式共享状态、HTTP 请求与通用界面组件 |
 | static/styles.css | 响应式布局与中文视觉样式 |
 | static/diagnostics.html | 合成媒体连接诊断 |
 | tests/test_workflow.py | 临时数据库中的业务与权限检查 |
 | start.cmd / start.ps1 / start.sh | 启动入口 |
+
+后端由 `app.py` 注册各模块；路由依赖房间服务、授权、校验和数据库模块，不反向导入应用入口。前端使用原生 ES 模块，通过显式导入共享 `appState` 和公共能力，入口负责启动与事件分发。保留原有启动方式、接口、数据库及音视频逻辑，无需前端构建步骤，请通过 HTTP/HTTPS 服务访问页面。
 
 数据保存在 `.local/interview.sqlite3`，会话密钥在 `.local/session.key`。如果要重新开始演练，先停止服务器，备份并重命名 `.local/interview.sqlite3` 及其存在的 `-wal`、`-shm` 文件，再启动生成新库。不要在服务运行时直接改动数据库。
 
